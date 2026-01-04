@@ -11,6 +11,7 @@ from src.core.logging import get_logger
 from src.core.pr_parser import extract_review_intent, parse_pr_reference
 from src.services.reviewer.service import review_pull_request
 from src.services.slack.client import get_slack_client
+from src.services.slack.service import _parse_review_summary
 
 logger = get_logger("slack.routes")
 
@@ -63,11 +64,13 @@ async def remove_reaction(channel: str, timestamp: str, emoji: str) -> None:
         logger.debug(f"Failed to remove reaction (may not exist): {e}")
 
 
-async def send_thread_reply(channel: str, thread_ts: str, text: str) -> None:
+async def send_thread_reply(
+    channel: str, thread_ts: str, text: str, blocks: list | None = None
+) -> None:
     """Send a reply in a thread."""
     try:
         client = get_slack_client()
-        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
+        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text, blocks=blocks)
     except Exception as e:
         logger.error(f"Failed to send thread reply: {e}")
 
@@ -106,15 +109,72 @@ async def handle_review_request(
         await remove_reaction(channel, thread_ts, "runner")
         await add_reaction(channel, thread_ts, "white_check_mark")
 
+        # Parse summary for rich blocks
+        summary = result.get("summary", "")
+        parsed = _parse_review_summary(summary)
+        pr_url = f"https://github.com/{pr_ref.owner}/{pr_ref.repo}/pull/{pr_ref.pr_number}"
+        comments_count = result.get("comments", 0)
+        files_reviewed = result.get("files_reviewed", 0)
+
+        # Build issues text
+        issues_text = (
+            "None" if not parsed["issues"] else "\n".join(f"• {i}" for i in parsed["issues"])
+        )
+
+        # Rich blocks for thread reply
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*<{pr_url}|{pr_ref.owner}/{pr_ref.repo}#{pr_ref.pr_number}>*",
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View PR", "emoji": True},
+                    "url": pr_url,
+                    "action_id": "view_pr_thread",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Risk Level*\n{parsed['risk_level']}"},
+                    {"type": "mrkdwn", "text": f"*Verdict*\n{parsed['verdict']}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Changes*\n{parsed['changes'] or 'No description'}",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Issues Found*\n{issues_text}",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f":page_facing_up: *{files_reviewed}* files  |  :speech_balloon: *{comments_count}* comments",
+                    },
+                ],
+            },
+        ]
+
         await send_thread_reply(
             channel=channel,
             thread_ts=thread_ts,
-            text=(
-                f"Reviewed *{pr_ref.owner}/{pr_ref.repo}#{pr_ref.pr_number}*\n\n"
-                f"* Files reviewed: {result.get('files_reviewed', 0)}\n"
-                f"* Comments: {result.get('comments', 0)}\n\n"
-                f"{result.get('summary', '')[:500]}"
-            ),
+            text=f"Reviewed {pr_ref.owner}/{pr_ref.repo}#{pr_ref.pr_number}",
+            blocks=blocks,
         )
 
     except Exception as e:
