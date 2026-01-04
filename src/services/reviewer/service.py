@@ -59,7 +59,10 @@ async def review_pull_request(
 
     # Create and run the agent graph
     graph = create_review_graph(owner, repo, pr.head.ref)
-    final_state = await graph.ainvoke(initial_state)
+    final_state = await graph.ainvoke(
+        initial_state,
+        config={"recursion_limit": 100},
+    )
 
     overall_summary = final_state.get("overall_summary") or "Review completed."
     all_comments = final_state.get("file_comments", [])
