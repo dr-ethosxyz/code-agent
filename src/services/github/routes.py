@@ -1,12 +1,27 @@
 """GitHub webhook routes."""
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 from loguru import logger
 
 from src.services.github.client import verify_webhook_signature
 from src.services.reviewer.service import review_pull_request
 
 router = APIRouter()
+
+
+class ManualReviewRequest(BaseModel):
+    owner: str
+    repo: str
+    pr_number: int
+
+
+@router.post("/review")
+async def manual_review(req: ManualReviewRequest, background_tasks: BackgroundTasks):
+    """Trigger a manual PR review."""
+    logger.info(f"Manual review requested: {req.owner}/{req.repo}#{req.pr_number}")
+    background_tasks.add_task(run_review, req.owner, req.repo, req.pr_number)
+    return {"message": "Review started", "pr": f"{req.owner}/{req.repo}#{req.pr_number}"}
 
 
 @router.post("/webhook/github")
