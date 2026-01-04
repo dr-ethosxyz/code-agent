@@ -87,15 +87,27 @@ def create_review(
 ) -> None:
     """Create a review on a PR."""
     review_comments = []
+    skipped = 0
     for c in comments:
-        if c.get("line") and c.get("path"):
+        line = c.get("line")
+        path = c.get("path")
+        message = c.get("message", "")
+
+        # Validate: need path, positive integer line, and non-empty message
+        if path and isinstance(line, int) and line > 0 and message:
             review_comments.append(
                 {
-                    "path": c["path"],
-                    "line": c["line"],
-                    "body": c["message"],
+                    "path": path,
+                    "line": line,
+                    "body": message,
                 }
             )
+        else:
+            skipped += 1
+            logger.debug(f"Skipped comment: path={path}, line={line}")
+
+    if skipped > 0:
+        logger.warning(f"Skipped {skipped} comments with invalid line numbers")
 
     pr.create_review(
         body=body,
