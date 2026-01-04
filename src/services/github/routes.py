@@ -1,27 +1,29 @@
-"""GitHub webhook routes."""
+"""GitHub webhook routes - HTTP layer only."""
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from loguru import logger
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Request
 
-from src.services.github.client import verify_webhook_signature
-from src.services.reviewer.service import review_pull_request
+from src.core.logging import get_logger
+from src.core.security import require_github_signature
+from src.services.github.schemas import (
+    ManualReviewRequest,
+    PingResponse,
+    ReviewStartedResponse,
+)
+from src.services.github.service import handle_pull_request_event, run_review
 
+logger = get_logger("github.routes")
 router = APIRouter()
 
 
-class ManualReviewRequest(BaseModel):
-    owner: str
-    repo: str
-    pr_number: int
-
-
-@router.post("/review")
-async def manual_review(req: ManualReviewRequest, background_tasks: BackgroundTasks):
+@router.post("/review", response_model=ReviewStartedResponse)
+async def manual_review(
+    req: ManualReviewRequest,
+    background_tasks: BackgroundTasks,
+) -> ReviewStartedResponse:
     """Trigger a manual PR review."""
     logger.info(f"Manual review requested: {req.owner}/{req.repo}#{req.pr_number}")
     background_tasks.add_task(run_review, req.owner, req.repo, req.pr_number)
-    return {"message": "Review started", "pr": f"{req.owner}/{req.repo}#{req.pr_number}"}
+    return ReviewStartedResponse(pr=f"{req.owner}/{req.repo}#{req.pr_number}")
 
 
 @router.post("/webhook/github")
@@ -34,58 +36,14 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     logger.info(f"Webhook received: event={event}, delivery={delivery_id}")
 
     body = await request.body()
-
-    if not verify_webhook_signature(body, signature):
-        logger.warning("Invalid webhook signature")
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    require_github_signature(body, signature)
 
     payload = await request.json()
 
     if event == "pull_request":
-        return await handle_pull_request(payload, background_tasks)
+        return await handle_pull_request_event(payload, background_tasks)
     elif event == "ping":
-        return {"message": "pong", "zen": payload.get("zen", "")}
+        return PingResponse(zen=payload.get("zen", ""))
     else:
         logger.info(f"Unhandled event type: {event}")
         return {"message": f"Event {event} not handled"}
-
-
-async def handle_pull_request(payload: dict, background_tasks: BackgroundTasks):
-    """Handle pull_request events."""
-    action = payload.get("action")
-    pr = payload.get("pull_request", {})
-    repo = payload.get("repository", {})
-
-    owner = repo.get("owner", {}).get("login")
-    repo_name = repo.get("name")
-    pr_number = pr.get("number")
-
-    logger.info(f"PR event: {action} on {owner}/{repo_name}#{pr_number}")
-
-    if action not in ("opened", "synchronize"):
-        return {
-            "message": f"Action {action} not reviewed",
-            "supported_actions": ["opened", "synchronize"],
-        }
-
-    background_tasks.add_task(
-        run_review,
-        owner=owner,
-        repo=repo_name,
-        pr_number=pr_number,
-    )
-
-    return {
-        "message": "Review started",
-        "pr": f"{owner}/{repo_name}#{pr_number}",
-        "action": action,
-    }
-
-
-async def run_review(owner: str, repo: str, pr_number: int):
-    """Run the review in background."""
-    try:
-        result = await review_pull_request(owner, repo, pr_number)
-        logger.info(f"Review completed: {result}")
-    except Exception as e:
-        logger.error(f"Review failed: {e}")

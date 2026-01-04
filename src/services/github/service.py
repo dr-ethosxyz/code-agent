@@ -1,9 +1,12 @@
 """GitHub service - business logic layer."""
 
+from fastapi import BackgroundTasks
 from github.PullRequest import PullRequest
-from loguru import logger
 
+from src.core.logging import get_logger
 from src.services.github.client import create_review, fetch_pr_files, fetch_pull_request
+
+logger = get_logger("github.service")
 
 
 def get_pull_request(owner: str, repo: str, pr_number: int) -> PullRequest:
@@ -60,3 +63,46 @@ def search_code(owner: str, repo: str, query: str) -> list[dict]:
 
     logger.info(f"Searching code in {owner}/{repo}: {query}")
     return search_code_in_repo(owner, repo, query)
+
+
+async def handle_pull_request_event(
+    payload: dict,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """Handle pull_request webhook events."""
+    action = payload.get("action")
+    pr = payload.get("pull_request", {})
+    repo = payload.get("repository", {})
+
+    owner = repo.get("owner", {}).get("login")
+    repo_name = repo.get("name")
+    pr_number = pr.get("number")
+
+    logger.info(f"PR event: {action} on {owner}/{repo_name}#{pr_number}")
+
+    if action not in ("opened", "synchronize"):
+        return {
+            "message": f"Action {action} not reviewed",
+            "supported_actions": ["opened", "synchronize"],
+        }
+
+    background_tasks.add_task(run_review, owner, repo_name, pr_number)
+
+    return {
+        "message": "Review started",
+        "pr": f"{owner}/{repo_name}#{pr_number}",
+        "action": action,
+    }
+
+
+async def run_review(owner: str, repo: str, pr_number: int) -> dict:
+    """Run the review in background."""
+    from src.services.reviewer.service import review_pull_request
+
+    try:
+        result = await review_pull_request(owner, repo, pr_number)
+        logger.info(f"Review completed: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Review failed: {e}")
+        raise
