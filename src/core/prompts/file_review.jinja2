@@ -1,0 +1,14 @@
+Review this file from PR: {{ pr_title }}
+
+PR Description: {{ pr_description or 'No description provided' }}
+
+File: {{ filename }}
+Additions: {{ additions }}, Deletions: {{ deletions }}
+
+Diff:
+```
+{{ patch }}
+```
+
+Analyze this diff. If you need more context to provide a good review, use the available tools.
+When you're done, respond with the JSON format described in your instructions.

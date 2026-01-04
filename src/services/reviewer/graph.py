@@ -10,62 +10,16 @@ from langgraph.prebuilt import ToolNode
 from src.config import settings
 from src.core.llm import get_chat_llm
 from src.core.logging import get_logger
+from src.core.prompts import (
+    render_file_review_prompt,
+    render_generate_summary_prompt,
+    render_review_system_prompt,
+    render_summary_system_prompt,
+)
 from src.services.reviewer.state import ReviewState
 from src.services.reviewer.tools import create_github_tools
 
 logger = get_logger("reviewer.graph")
-
-REVIEW_SYSTEM_PROMPT = """You are an expert code reviewer. Your task is to review code changes in a pull request.
-
-For the current file, you will:
-1. Analyze the diff/patch carefully
-2. If you need more context (full file, imports, related files), use the available tools
-3. Once you have enough context, provide your review
-
-When you're done reviewing the file, respond with a JSON object in this exact format:
-```json
-{
-  "done": true,
-  "comments": [
-    {"line": <line_number>, "message": "<comment>"}
-  ],
-  "summary": "<brief summary of this file's changes>"
-}
-```
-
-The line numbers should correspond to the NEW file (lines starting with +).
-Only include comments for actual issues - bugs, security concerns, performance problems, or significant code quality issues.
-Do NOT comment on style preferences or minor improvements unless they're significant.
-
-If you need to use a tool to get more context, just call the tool. Do not include the JSON response until you're done.
-
-Available tools:
-- get_file: Get full contents of any file in the repo
-- list_files: List files in a directory
-- search_codebase: Search for code patterns
-- get_imports: Extract import statements from a file
-- find_related_files: Find test files, types, related code"""
-
-
-SUMMARY_SYSTEM_PROMPT = """You are summarizing a code review. Given the individual file summaries, create a structured review summary.
-
-You MUST use this EXACT format:
-
-## ⚡ Review Summary
-
-**Changes:** <1 sentence describing what this PR does>
-
-**Risk Level:** <🟢 Low | 🟡 Medium | 🔴 High>
-
-**Issues Found:**
-<list issues as bullet points, or "None" if clean>
-
-**Verdict:** <✅ LGTM | ⚠️ Needs Changes | 🚫 Request Changes>
-
----
-*Reviewed by Matter Code Agent*
-
-Be direct and specific. Focus on actual issues, not style nitpicks."""
 
 
 def create_review_graph(owner: str, repo: str, head_ref: str):
@@ -90,25 +44,19 @@ def create_review_graph(owner: str, repo: str, head_ref: str):
         current_file = files[idx]
         logger.info(f"Selecting file {idx + 1}/{len(files)}: {current_file['filename']}")
 
-        # Build the initial prompt for this file
-        prompt = f"""Review this file from PR: {state["pr_title"]}
-
-PR Description: {state["pr_description"] or "No description provided"}
-
-File: {current_file["filename"]}
-Additions: {current_file["additions"]}, Deletions: {current_file["deletions"]}
-
-Diff:
-```
-{current_file["patch"]}
-```
-
-Analyze this diff. If you need more context to provide a good review, use the available tools.
-When you're done, respond with the JSON format described in your instructions."""
+        # Build the initial prompt for this file using jinja2 template
+        prompt = render_file_review_prompt(
+            pr_title=state["pr_title"],
+            pr_description=state["pr_description"],
+            filename=current_file["filename"],
+            additions=current_file["additions"],
+            deletions=current_file["deletions"],
+            patch=current_file["patch"],
+        )
 
         return {
             "messages": [
-                SystemMessage(content=REVIEW_SYSTEM_PROMPT),
+                SystemMessage(content=render_review_system_prompt()),
                 HumanMessage(content=prompt),
             ]
         }
@@ -209,15 +157,12 @@ When you're done, respond with the JSON format described in your instructions.""
                 "review_complete": True,
             }
 
-        prompt = f"""These are the individual file reviews from a PR:
-
-{chr(10).join(file_summaries)}
-
-Provide an overall summary of this code review."""
+        # Build the summary prompt using jinja2 template
+        prompt = render_generate_summary_prompt(file_summaries)
 
         llm = get_chat_llm(model=settings.synthesis_model)
         messages = [
-            SystemMessage(content=SUMMARY_SYSTEM_PROMPT),
+            SystemMessage(content=render_summary_system_prompt()),
             HumanMessage(content=prompt),
         ]
 
