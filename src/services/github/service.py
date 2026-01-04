@@ -29,12 +29,13 @@ def submit_review(
     pr_number: int,
     body: str,
     comments: list[dict],
+    invalid_comments: list[dict] | None = None,
     event: str = "COMMENT",
 ) -> None:
     """Submit a review to a PR."""
     pr = fetch_pull_request(owner, repo, pr_number)
     try:
-        create_review(pr, body, comments, event)
+        create_review(pr, body, comments, invalid_comments or [], event)
         logger.info(f"Submitted review with {len(comments)} comments")
     except Exception as e:
         logger.error(f"Failed to submit review: {e}")

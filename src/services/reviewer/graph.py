@@ -1,11 +1,10 @@
-"""LangGraph agent for code review."""
+"""LangGraph agent for code review with parallel file processing."""
 
+import asyncio
 import json
-from typing import Literal
+from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from src.config import settings
 from src.core.llm import get_chat_llm
@@ -16,201 +15,214 @@ from src.core.prompts import (
     render_review_system_prompt,
     render_summary_system_prompt,
 )
-from src.services.reviewer.state import ReviewState
 from src.services.reviewer.tools import create_github_tools
 
 logger = get_logger("reviewer.graph")
 
+MAX_TOOL_ITERATIONS = 5  # Max tool calls per file
 
-def create_review_graph(owner: str, repo: str, head_ref: str):
-    """Create the review agent graph."""
 
-    # Create tools bound to this repo and PR branch
+@dataclass
+class FileReviewResult:
+    """Result of reviewing a single file."""
+
+    filename: str
+    comments: list[dict]
+    summary: str
+
+
+async def review_single_file(
+    file: dict,
+    pr_title: str,
+    pr_description: str | None,
+    owner: str,
+    repo: str,
+    head_ref: str,
+) -> FileReviewResult:
+    """Review a single file with tool calling support.
+
+    This function handles the complete review of one file,
+    including multiple tool call iterations if needed.
+    """
+    filename = file["filename"]
+    logger.info(f"Starting review: {filename}")
+
+    # Create tools and LLM for this file
     tools = create_github_tools(owner, repo, head_ref)
-
-    # Create LLM with tools
     llm = get_chat_llm(model=settings.review_model)
     llm_with_tools = llm.bind_tools(tools)
 
-    def select_next_file(state: ReviewState) -> dict:
-        """Select the next file to review."""
-        idx = state["current_file_index"]
-        files = state["files"]
+    # Build tool map for execution
+    tool_map = {tool.name: tool for tool in tools}
 
-        if idx >= len(files):
-            logger.info("All files reviewed")
-            return {}
+    # Initial prompt
+    prompt = render_file_review_prompt(
+        pr_title=pr_title,
+        pr_description=pr_description,
+        filename=filename,
+        additions=file["additions"],
+        deletions=file["deletions"],
+        patch=file["patch"],
+    )
 
-        current_file = files[idx]
-        logger.info(f"Selecting file {idx + 1}/{len(files)}: {current_file['filename']}")
+    messages = [
+        SystemMessage(content=render_review_system_prompt()),
+        HumanMessage(content=prompt),
+    ]
 
-        # Build the initial prompt for this file using jinja2 template
-        prompt = render_file_review_prompt(
-            pr_title=state["pr_title"],
-            pr_description=state["pr_description"],
-            filename=current_file["filename"],
-            additions=current_file["additions"],
-            deletions=current_file["deletions"],
-            patch=current_file["patch"],
-        )
-
-        return {
-            "messages": [
-                SystemMessage(content=render_review_system_prompt()),
-                HumanMessage(content=prompt),
-            ]
-        }
-
-    async def review_file_node(state: ReviewState) -> dict:
-        """Have the LLM review the current file (may call tools)."""
-        messages = state["messages"]
+    # Tool calling loop
+    for iteration in range(MAX_TOOL_ITERATIONS):
         response = await llm_with_tools.ainvoke(messages)
-        return {"messages": [response]}
-
-    def route_after_review(
-        state: ReviewState,
-    ) -> Literal["tools", "process_review", "select_file"]:
-        """Route based on LLM response - tools, done with file, or error."""
-        last_message = state["messages"][-1]
-
-        if not isinstance(last_message, AIMessage):
-            logger.warning("Expected AIMessage, got something else")
-            return "select_file"
+        messages.append(response)
 
         # Check if LLM wants to use tools
-        if last_message.tool_calls:
-            logger.info(f"Agent calling tools: {[t['name'] for t in last_message.tool_calls]}")
-            return "tools"
+        if isinstance(response, AIMessage) and response.tool_calls:
+            logger.info(
+                f"[{filename}] Tool calls: {[t['name'] for t in response.tool_calls]}"
+            )
 
-        # Check if response contains done JSON
-        content = last_message.content
-        if isinstance(content, str) and '"done": true' in content.lower():
-            return "process_review"
+            # Execute all tool calls
+            tool_results = []
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
 
-        # LLM responded but didn't finish - might need prompting
-        logger.warning("LLM response doesn't contain done marker, continuing")
-        return "process_review"
+                if tool_name in tool_map:
+                    try:
+                        result = tool_map[tool_name].invoke(tool_args)
+                    except Exception as e:
+                        result = f"Error: {e}"
+                else:
+                    result = f"Unknown tool: {tool_name}"
 
-    def process_review_result(state: ReviewState) -> dict:
-        """Extract comments and summary from the LLM's final response."""
-        last_message = state["messages"][-1]
-        content = last_message.content if isinstance(last_message, AIMessage) else ""
-
-        current_file = state["files"][state["current_file_index"]]
-        file_comments = list(state["file_comments"])
-        file_summaries = list(state["file_summaries"])
-
-        # Try to parse the JSON response
-        try:
-            # Find JSON in the response
-            json_start = content.find("{")
-            json_end = content.rfind("}") + 1
-            if json_start != -1 and json_end > json_start:
-                json_str = content[json_start:json_end]
-                result = json.loads(json_str)
-
-                # Extract comments
-                for comment in result.get("comments", []):
-                    file_comments.append(
-                        {
-                            "path": current_file["filename"],
-                            "line": comment.get("line"),
-                            "message": comment.get("message", ""),
-                        }
-                    )
-
-                # Extract summary
-                if result.get("summary"):
-                    file_summaries.append(f"**{current_file['filename']}**: {result['summary']}")
-
-                logger.info(
-                    f"Processed review for {current_file['filename']}: "
-                    f"{len(result.get('comments', []))} comments"
+                tool_results.append(
+                    {
+                        "role": "tool",
+                        "content": str(result),
+                        "tool_call_id": tool_call["id"],
+                    }
                 )
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse review JSON: {e}")
-            # Still move to next file
-            file_summaries.append(f"**{current_file['filename']}**: Review completed (parse error)")
 
-        return {
-            "file_comments": file_comments,
-            "file_summaries": file_summaries,
-            "current_file_index": state["current_file_index"] + 1,
-            "messages": [],  # Clear messages for next file
-        }
+            # Add tool results to messages
+            for tr in tool_results:
+                messages.append(tr)
 
-    def should_continue_or_summarize(
-        state: ReviewState,
-    ) -> Literal["review_file", "generate_summary"]:
-        """Check if there are more files to review."""
-        if state["current_file_index"] >= len(state["files"]):
-            return "generate_summary"
-        return "review_file"
+            continue  # Let LLM process tool results
 
-    async def generate_summary_node(state: ReviewState) -> dict:
-        """Generate overall review summary."""
-        file_summaries = state["file_summaries"]
+        # No tool calls - LLM is done
+        break
 
-        if not file_summaries:
-            return {
-                "overall_summary": "No files were reviewed.",
-                "review_complete": True,
-            }
+    # Parse the final response
+    content = response.content if isinstance(response, AIMessage) else ""
+    comments = []
+    summary = "Reviewed"
 
-        # Build the summary prompt using jinja2 template
-        prompt = render_generate_summary_prompt(file_summaries)
+    try:
+        # Find JSON in the response
+        json_start = content.find("{")
+        json_end = content.rfind("}") + 1
+        if json_start != -1 and json_end > json_start:
+            json_str = content[json_start:json_end]
+            result = json.loads(json_str)
 
-        llm = get_chat_llm(model=settings.synthesis_model)
-        messages = [
-            SystemMessage(content=render_summary_system_prompt()),
-            HumanMessage(content=prompt),
-        ]
+            # Extract comments
+            for comment in result.get("comments", []):
+                comments.append(
+                    {
+                        "path": filename,
+                        "line": comment.get("line"),
+                        "message": comment.get("message", ""),
+                    }
+                )
 
-        response = await llm.ainvoke(messages)
-        summary = response.content if isinstance(response.content, str) else str(response.content)
+            summary = result.get("summary", "Reviewed")
 
-        logger.info("Generated overall summary")
+            logger.info(f"[{filename}] Completed: {len(comments)} comments")
+    except json.JSONDecodeError as e:
+        logger.warning(f"[{filename}] Failed to parse JSON: {e}")
+        summary = "Review completed (parse error)"
 
-        return {
-            "overall_summary": summary,
-            "review_complete": True,
-        }
+    return FileReviewResult(filename=filename, comments=comments, summary=summary)
 
-    # Build the graph
-    graph = StateGraph(ReviewState)
 
-    # Add nodes
-    graph.add_node("select_file", select_next_file)
-    graph.add_node("review_file", review_file_node)
-    graph.add_node("tools", ToolNode(tools=tools))
-    graph.add_node("process_review", process_review_result)
-    graph.add_node("generate_summary", generate_summary_node)
+async def generate_summary(file_summaries: list[str]) -> str:
+    """Generate overall review summary from file summaries."""
+    if not file_summaries:
+        return "No files were reviewed."
 
-    # Set entry point
-    graph.set_entry_point("select_file")
+    prompt = render_generate_summary_prompt(file_summaries)
+    llm = get_chat_llm(model=settings.synthesis_model)
 
-    # Add edges
-    graph.add_conditional_edges(
-        "select_file",
-        should_continue_or_summarize,
-        {
-            "review_file": "review_file",
-            "generate_summary": "generate_summary",
-        },
+    messages = [
+        SystemMessage(content=render_summary_system_prompt()),
+        HumanMessage(content=prompt),
+    ]
+
+    response = await llm.ainvoke(messages)
+    summary = response.content if isinstance(response.content, str) else str(response.content)
+
+    logger.info("Generated overall summary")
+    return summary
+
+
+async def review_files_parallel(
+    files: list[dict],
+    pr_title: str,
+    pr_description: str | None,
+    owner: str,
+    repo: str,
+    head_ref: str,
+    max_concurrency: int = 5,
+) -> tuple[list[dict], str]:
+    """Review all files in parallel with concurrency limit.
+
+    Args:
+        files: List of file dicts with filename, patch, additions, deletions
+        pr_title: PR title for context
+        pr_description: PR description for context
+        owner: Repository owner
+        repo: Repository name
+        head_ref: PR head branch ref
+        max_concurrency: Maximum concurrent file reviews
+
+    Returns:
+        Tuple of (all_comments, overall_summary)
+    """
+    logger.info(f"Reviewing {len(files)} files in parallel (max {max_concurrency} concurrent)")
+
+    # Create semaphore for concurrency control
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def review_with_limit(file: dict) -> FileReviewResult:
+        async with semaphore:
+            return await review_single_file(
+                file=file,
+                pr_title=pr_title,
+                pr_description=pr_description,
+                owner=owner,
+                repo=repo,
+                head_ref=head_ref,
+            )
+
+    # Run all file reviews in parallel
+    results = await asyncio.gather(
+        *[review_with_limit(f) for f in files],
+        return_exceptions=True,
     )
 
-    graph.add_conditional_edges(
-        "review_file",
-        route_after_review,
-        {
-            "tools": "tools",
-            "process_review": "process_review",
-            "select_file": "select_file",
-        },
-    )
+    # Collect results
+    all_comments = []
+    file_summaries = []
 
-    graph.add_edge("tools", "review_file")
-    graph.add_edge("process_review", "select_file")
-    graph.add_edge("generate_summary", END)
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"File review failed: {result}")
+            continue
+        if isinstance(result, FileReviewResult):
+            all_comments.extend(result.comments)
+            file_summaries.append(f"**{result.filename}**: {result.summary}")
 
-    return graph.compile()
+    # Generate overall summary
+    overall_summary = await generate_summary(file_summaries)
+
+    return all_comments, overall_summary

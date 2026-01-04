@@ -3,8 +3,8 @@
 from src.config import settings
 from src.core.logging import get_logger
 from src.services.github.service import get_pr_files, get_pull_request, submit_review
-from src.services.reviewer.graph import create_review_graph
-from src.services.reviewer.state import ReviewState
+from src.services.reviewer.graph import review_files_parallel
+from src.services.reviewer.patch_parser import filter_comments_by_valid_lines
 from src.services.slack.service import send_review_notification
 
 logger = get_logger("reviewer.service")
@@ -15,8 +15,8 @@ async def review_pull_request(
     repo: str,
     pr_number: int,
 ) -> dict:
-    """Review a complete pull request using the agentic reviewer."""
-    logger.info(f"Starting agentic review: {owner}/{repo}#{pr_number}")
+    """Review a complete pull request using parallel file processing."""
+    logger.info(f"Starting parallel review: {owner}/{repo}#{pr_number}")
 
     # Fetch PR metadata and files
     pr = get_pull_request(owner, repo, pr_number)
@@ -41,30 +41,25 @@ async def review_pull_request(
             "summary": "No reviewable changes found.",
         }
 
-    # Initialize agent state
-    initial_state: ReviewState = {
-        "owner": owner,
-        "repo": repo,
-        "pr_number": pr_number,
-        "pr_title": pr.title,
-        "pr_description": pr.body,
-        "files": reviewable_files,
-        "current_file_index": 0,
-        "messages": [],
-        "file_comments": [],
-        "file_summaries": [],
-        "overall_summary": None,
-        "review_complete": False,
-    }
+    # Run parallel file reviews
+    all_comments, overall_summary = await review_files_parallel(
+        files=reviewable_files,
+        pr_title=pr.title,
+        pr_description=pr.body,
+        owner=owner,
+        repo=repo,
+        head_ref=pr.head.ref,
+        max_concurrency=5,
+    )
 
-    # Create and run the agent graph
-    graph = create_review_graph(owner, repo, pr.head.ref)
-    final_state = await graph.ainvoke(initial_state)
+    logger.info(f"Parallel review completed: {len(all_comments)} comments")
 
-    overall_summary = final_state.get("overall_summary") or "Review completed."
-    all_comments = final_state.get("file_comments", [])
+    # Filter comments to only valid line numbers
+    patches = {f["filename"]: f["patch"] for f in reviewable_files}
+    valid_comments, invalid_comments = filter_comments_by_valid_lines(all_comments, patches)
 
-    logger.info(f"Agent review completed: {len(all_comments)} comments")
+    if invalid_comments:
+        logger.warning(f"Filtered {len(invalid_comments)} comments with invalid line numbers")
 
     # Submit review to GitHub
     try:
@@ -73,10 +68,11 @@ async def review_pull_request(
             repo=repo,
             pr_number=pr_number,
             body=overall_summary,
-            comments=all_comments,
+            comments=valid_comments,
+            invalid_comments=invalid_comments,
             event="COMMENT",
         )
-        logger.info(f"Review submitted with {len(all_comments)} comments")
+        logger.info(f"Review submitted with {len(valid_comments)} inline comments")
     except Exception as e:
         logger.error(f"Failed to submit review: {e}")
 
