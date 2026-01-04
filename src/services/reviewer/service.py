@@ -1,11 +1,11 @@
 """Reviewer service - orchestration layer."""
 
-from src.services.github.service import get_pull_request, get_pr_files, submit_review
-from src.services.slack.service import send_review_notification
+from src.config import settings
+from src.core.logging import get_logger
+from src.services.github.service import get_pr_files, get_pull_request, submit_review
 from src.services.reviewer.graph import create_review_graph
 from src.services.reviewer.state import ReviewState
-from src.core.logging import get_logger
-from src.config import settings
+from src.services.slack.service import send_review_notification
 
 logger = get_logger("reviewer.service")
 
@@ -29,7 +29,7 @@ async def review_pull_request(
 
     if len(reviewable_files) > settings.max_files_per_review:
         logger.warning(f"Limiting review to {settings.max_files_per_review} files")
-        reviewable_files = reviewable_files[:settings.max_files_per_review]
+        reviewable_files = reviewable_files[: settings.max_files_per_review]
 
     if not reviewable_files:
         logger.info("No files with patches to review")
@@ -58,7 +58,7 @@ async def review_pull_request(
     }
 
     # Create and run the agent graph
-    graph = create_review_graph(owner, repo)
+    graph = create_review_graph(owner, repo, pr.head.ref)
     final_state = await graph.ainvoke(initial_state)
 
     overall_summary = final_state.get("overall_summary") or "Review completed."

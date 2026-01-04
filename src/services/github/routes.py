@@ -1,8 +1,8 @@
 """GitHub webhook routes."""
 
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from loguru import logger
+from pydantic import BaseModel
 
 from src.services.github.client import verify_webhook_signature
 from src.services.reviewer.service import review_pull_request

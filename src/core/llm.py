@@ -1,8 +1,10 @@
 """LLM client using OpenRouter."""
 
 from typing import Type, TypeVar
-from langchain_openai import ChatOpenAI
+
 from langchain_core.runnables import Runnable
+from langchain_openai import ChatOpenAI
+
 from src.config import settings
 from src.core.logging import get_logger
 

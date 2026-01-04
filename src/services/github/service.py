@@ -3,7 +3,7 @@
 from github.PullRequest import PullRequest
 from loguru import logger
 
-from src.services.github.client import fetch_pull_request, fetch_pr_files, create_review
+from src.services.github.client import create_review, fetch_pr_files, fetch_pull_request
 
 
 def get_pull_request(owner: str, repo: str, pr_number: int) -> PullRequest:
@@ -41,6 +41,7 @@ def submit_review(
 def get_file_contents(owner: str, repo: str, path: str, ref: str = "HEAD") -> str:
     """Get full file contents from repository."""
     from src.services.github.client import fetch_file_contents
+
     logger.info(f"Fetching file: {owner}/{repo}/{path}@{ref}")
     return fetch_file_contents(owner, repo, path, ref)
 
@@ -48,6 +49,7 @@ def get_file_contents(owner: str, repo: str, path: str, ref: str = "HEAD") -> st
 def list_directory(owner: str, repo: str, path: str = "") -> list[dict]:
     """List contents of a directory in the repository."""
     from src.services.github.client import fetch_directory_contents
+
     logger.info(f"Listing directory: {owner}/{repo}/{path}")
     return fetch_directory_contents(owner, repo, path)
 
@@ -55,5 +57,6 @@ def list_directory(owner: str, repo: str, path: str = "") -> list[dict]:
 def search_code(owner: str, repo: str, query: str) -> list[dict]:
     """Search code in repository."""
     from src.services.github.client import search_code_in_repo
+
     logger.info(f"Searching code in {owner}/{repo}: {query}")
     return search_code_in_repo(owner, repo, query)

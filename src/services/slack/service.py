@@ -1,11 +1,12 @@
 """Slack service - business logic layer."""
 
 from typing import Optional
+
 from slack_sdk.errors import SlackApiError
 
 from src.config import settings
-from src.services.slack.client import post_message
 from src.core.logging import get_logger
+from src.services.slack.client import post_message
 
 logger = get_logger("slack.service")
 

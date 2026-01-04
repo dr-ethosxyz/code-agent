@@ -1,8 +1,8 @@
 """Slack API client - data layer."""
 
 from typing import Optional
+
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
 
 from src.config import settings
 from src.core.logging import get_logger

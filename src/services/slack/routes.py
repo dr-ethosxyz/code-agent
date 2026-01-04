@@ -3,11 +3,12 @@
 import hashlib
 import hmac
 import time
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from src.config import settings
 from src.core.logging import get_logger
-from src.core.pr_parser import parse_pr_reference, extract_review_intent
+from src.core.pr_parser import extract_review_intent, parse_pr_reference
 from src.services.reviewer.service import review_pull_request
 from src.services.slack.client import get_slack_client
 

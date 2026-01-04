@@ -35,8 +35,7 @@ def configure_logging() -> None:
         logger.add(
             sys.stderr,
             format=(
-                "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | "
-                "{name}:{function}:{line} - {message}"
+                "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
             ),
             level=log_level,
             serialize=True,

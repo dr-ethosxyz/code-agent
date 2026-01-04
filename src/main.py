@@ -4,10 +4,10 @@ from fastapi import FastAPI
 
 from src.config import settings
 from src.core.logging import get_logger
-
-logger = get_logger("main")
 from src.services.github.routes import router as github_router
 from src.services.slack.routes import router as slack_router
+
+logger = get_logger("main")
 
 app = FastAPI(
     title="Matter PR Reviewer",

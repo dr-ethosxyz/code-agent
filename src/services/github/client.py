@@ -1,8 +1,9 @@
 """GitHub API client - data layer."""
 
-import hmac
 import hashlib
+import hmac
 from typing import Optional
+
 from github import Github, GithubIntegration
 from github.PullRequest import PullRequest
 from loguru import logger
@@ -35,7 +36,9 @@ def get_github_client() -> Github:
     if _github_client:
         return _github_client
 
-    if not all([settings.github_app_id, settings.github_private_key, settings.github_installation_id]):
+    if not all(
+        [settings.github_app_id, settings.github_private_key, settings.github_installation_id]
+    ):
         raise ValueError("GitHub App credentials not configured")
 
     private_key = settings.github_private_key.replace("\\n", "\n")
@@ -63,14 +66,16 @@ def fetch_pr_files(pr: PullRequest) -> list[dict]:
     """Fetch changed files from a PR."""
     files = []
     for f in pr.get_files():
-        files.append({
-            "filename": f.filename,
-            "status": f.status,
-            "additions": f.additions,
-            "deletions": f.deletions,
-            "patch": f.patch or "",
-            "contents_url": f.contents_url,
-        })
+        files.append(
+            {
+                "filename": f.filename,
+                "status": f.status,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "patch": f.patch or "",
+                "contents_url": f.contents_url,
+            }
+        )
     return files
 
 
@@ -84,11 +89,13 @@ def create_review(
     review_comments = []
     for c in comments:
         if c.get("line") and c.get("path"):
-            review_comments.append({
-                "path": c["path"],
-                "line": c["line"],
-                "body": c["message"],
-            })
+            review_comments.append(
+                {
+                    "path": c["path"],
+                    "line": c["line"],
+                    "body": c["message"],
+                }
+            )
 
     pr.create_review(
         body=body,
@@ -141,14 +148,20 @@ def search_code_in_repo(owner: str, repo: str, query: str) -> list[dict]:
     try:
         results = client.search_code(search_query)
         items = []
-        for item in results[:20]:  # Limit to 20 results
-            items.append({
-                "path": item.path,
-                "name": item.name,
-                "html_url": item.html_url,
-                "repository": item.repository.full_name,
-            })
+        count = 0
+        for item in results:
+            if count >= 20:
+                break
+            items.append(
+                {
+                    "path": item.path,
+                    "name": item.name,
+                    "html_url": item.html_url,
+                    "repository": item.repository.full_name,
+                }
+            )
+            count += 1
         return items
     except Exception as e:
         logger.error(f"Code search failed for '{query}': {e}")
-        raise
+        return []

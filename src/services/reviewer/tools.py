@@ -8,16 +8,16 @@ from langchain_core.tools import tool
 from src.services.github.service import get_file_contents, list_directory, search_code
 
 
-def create_github_tools(owner: str, repo: str) -> list[Callable]:
-    """Create GitHub tools bound to a specific repository.
+def create_github_tools(owner: str, repo: str, head_ref: str) -> list[Callable]:
+    """Create GitHub tools bound to a specific repository and PR branch.
 
-    Tools are created with owner/repo pre-bound so the agent
+    Tools are created with owner/repo/head_ref pre-bound so the agent
     doesn't need to specify them on each call.
     """
 
     @tool
-    def get_file(path: str, ref: str = "HEAD") -> str:
-        """Fetch full contents of a file from the repository.
+    def get_file(path: str) -> str:
+        """Fetch full contents of a file from the PR branch.
 
         Use this when:
         - The patch diff doesn't provide enough context
@@ -26,10 +26,9 @@ def create_github_tools(owner: str, repo: str) -> list[Callable]:
 
         Args:
             path: File path relative to repo root (e.g. "src/utils/helper.py")
-            ref: Git ref (branch/commit/tag), defaults to HEAD
         """
         try:
-            content = get_file_contents(owner, repo, path, ref)
+            content = get_file_contents(owner, repo, path, head_ref)
             # Truncate very large files
             if len(content) > 50000:
                 return content[:50000] + "\n\n... [truncated, file too large]"
@@ -95,7 +94,7 @@ def create_github_tools(owner: str, repo: str) -> list[Callable]:
             path: File path relative to repo root
         """
         try:
-            content = get_file_contents(owner, repo, path, "HEAD")
+            content = get_file_contents(owner, repo, path, head_ref)
 
             # Python imports
             if path.endswith(".py"):
@@ -135,7 +134,6 @@ def create_github_tools(owner: str, repo: str) -> list[Callable]:
         try:
             # Extract filename without extension
             parts = path.rsplit("/", 1)
-            directory = parts[0] if len(parts) > 1 else ""
             filename = parts[-1]
             name_without_ext = filename.rsplit(".", 1)[0]
 

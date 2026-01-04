@@ -7,9 +7,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from src.config import settings
 from src.core.llm import get_chat_llm
 from src.core.logging import get_logger
-from src.config import settings
 from src.services.reviewer.state import ReviewState
 from src.services.reviewer.tools import create_github_tools
 
@@ -47,21 +47,32 @@ Available tools:
 - find_related_files: Find test files, types, related code"""
 
 
-SUMMARY_SYSTEM_PROMPT = """You are summarizing a code review. Given the individual file summaries, create a concise overall summary.
+SUMMARY_SYSTEM_PROMPT = """You are summarizing a code review. Given the individual file summaries, create a structured review summary.
 
-Format your response as a brief paragraph (2-4 sentences) that captures:
-- The main theme of the changes
-- Any notable issues found
-- Overall assessment (LGTM, needs changes, etc.)
+You MUST use this EXACT format:
 
-Be direct and specific. Don't be overly positive or negative."""
+## ⚡ Review Summary
+
+**Changes:** <1 sentence describing what this PR does>
+
+**Risk Level:** <🟢 Low | 🟡 Medium | 🔴 High>
+
+**Issues Found:**
+<list issues as bullet points, or "None" if clean>
+
+**Verdict:** <✅ LGTM | ⚠️ Needs Changes | 🚫 Request Changes>
+
+---
+*Reviewed by Matter Code Agent*
+
+Be direct and specific. Focus on actual issues, not style nitpicks."""
 
 
-def create_review_graph(owner: str, repo: str):
+def create_review_graph(owner: str, repo: str, head_ref: str):
     """Create the review agent graph."""
 
-    # Create tools bound to this repo
-    tools = create_github_tools(owner, repo)
+    # Create tools bound to this repo and PR branch
+    tools = create_github_tools(owner, repo, head_ref)
 
     # Create LLM with tools
     llm = get_chat_llm(model=settings.review_model)
@@ -80,16 +91,16 @@ def create_review_graph(owner: str, repo: str):
         logger.info(f"Selecting file {idx + 1}/{len(files)}: {current_file['filename']}")
 
         # Build the initial prompt for this file
-        prompt = f"""Review this file from PR: {state['pr_title']}
+        prompt = f"""Review this file from PR: {state["pr_title"]}
 
-PR Description: {state['pr_description'] or 'No description provided'}
+PR Description: {state["pr_description"] or "No description provided"}
 
-File: {current_file['filename']}
-Additions: {current_file['additions']}, Deletions: {current_file['deletions']}
+File: {current_file["filename"]}
+Additions: {current_file["additions"]}, Deletions: {current_file["deletions"]}
 
 Diff:
 ```
-{current_file['patch']}
+{current_file["patch"]}
 ```
 
 Analyze this diff. If you need more context to provide a good review, use the available tools.
@@ -152,17 +163,17 @@ When you're done, respond with the JSON format described in your instructions.""
 
                 # Extract comments
                 for comment in result.get("comments", []):
-                    file_comments.append({
-                        "path": current_file["filename"],
-                        "line": comment.get("line"),
-                        "message": comment.get("message", ""),
-                    })
+                    file_comments.append(
+                        {
+                            "path": current_file["filename"],
+                            "line": comment.get("line"),
+                            "message": comment.get("message", ""),
+                        }
+                    )
 
                 # Extract summary
                 if result.get("summary"):
-                    file_summaries.append(
-                        f"**{current_file['filename']}**: {result['summary']}"
-                    )
+                    file_summaries.append(f"**{current_file['filename']}**: {result['summary']}")
 
                 logger.info(
                     f"Processed review for {current_file['filename']}: "
@@ -171,9 +182,7 @@ When you're done, respond with the JSON format described in your instructions.""
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse review JSON: {e}")
             # Still move to next file
-            file_summaries.append(
-                f"**{current_file['filename']}**: Review completed (parse error)"
-            )
+            file_summaries.append(f"**{current_file['filename']}**: Review completed (parse error)")
 
         return {
             "file_comments": file_comments,
@@ -206,7 +215,7 @@ When you're done, respond with the JSON format described in your instructions.""
 
 Provide an overall summary of this code review."""
 
-        llm = get_chat_llm(model=settings.review_model)
+        llm = get_chat_llm(model=settings.synthesis_model)
         messages = [
             SystemMessage(content=SUMMARY_SYSTEM_PROMPT),
             HumanMessage(content=prompt),

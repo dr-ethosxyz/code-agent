@@ -1,6 +1,7 @@
 """Prompt templates using Jinja2."""
 
 from pathlib import Path
+
 from jinja2 import Environment, FileSystemLoader
 
 PROMPTS_DIR = Path(__file__).parent

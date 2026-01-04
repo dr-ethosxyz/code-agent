@@ -1,8 +1,9 @@
 """Configuration for Matter PR Reviewer Agent."""
 
 from typing import Optional
-from pydantic_settings import BaseSettings
+
 from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -35,7 +36,8 @@ class Settings(BaseSettings):
     default_repo_name: Optional[str] = Field(default=None, env="DEFAULT_REPO_NAME")
 
     # Review Configuration
-    review_model: str = Field(default="claude-sonnet-4", env="REVIEW_MODEL")
+    review_model: str = Field(default="gpt-4o", env="REVIEW_MODEL")
+    synthesis_model: str = Field(default="claude-sonnet-4", env="SYNTHESIS_MODEL")
     max_files_per_review: int = Field(default=50, env="MAX_FILES_PER_REVIEW")
 
     class Config:
