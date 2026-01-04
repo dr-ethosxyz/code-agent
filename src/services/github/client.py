@@ -100,7 +100,7 @@ def create_review(
     pr.create_review(
         body=body,
         event=event,
-        comments=review_comments if review_comments else None,
+        comments=review_comments,
     )
     logger.info(f"Created review with {len(review_comments)} comments")
 
