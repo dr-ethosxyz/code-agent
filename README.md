@@ -14,7 +14,7 @@ Go to https://github.com/settings/apps/new and create an app with:
 - Repository > Issues: Read & Write
 
 **Webhook:**
-- URL: Your ngrok/cloudflare tunnel URL + `/github/webhook`
+- URL: Your ngrok/cloudflare tunnel URL + `/api/webhook/github`
 - Secret: Generate a random string
 - Events: Pull request, Pull request review
 
