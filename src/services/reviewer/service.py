@@ -4,6 +4,7 @@ from src.config import settings
 from src.core.logging import get_logger
 from src.services.github.service import get_pr_files, get_pull_request, submit_review
 from src.services.reviewer.graph import review_files_parallel
+from src.services.reviewer.patch_parser import filter_comments_by_valid_lines
 from src.services.slack.service import send_review_notification
 
 logger = get_logger("reviewer.service")
@@ -53,6 +54,13 @@ async def review_pull_request(
 
     logger.info(f"Parallel review completed: {len(all_comments)} comments")
 
+    # Filter comments to only valid line numbers
+    patches = {f["filename"]: f["patch"] for f in reviewable_files}
+    valid_comments, invalid_comments = filter_comments_by_valid_lines(all_comments, patches)
+
+    if invalid_comments:
+        logger.warning(f"Filtered {len(invalid_comments)} comments with invalid line numbers")
+
     # Submit review to GitHub
     try:
         submit_review(
@@ -60,10 +68,11 @@ async def review_pull_request(
             repo=repo,
             pr_number=pr_number,
             body=overall_summary,
-            comments=all_comments,
+            comments=valid_comments,
+            invalid_comments=invalid_comments,
             event="COMMENT",
         )
-        logger.info(f"Review submitted with {len(all_comments)} comments")
+        logger.info(f"Review submitted with {len(valid_comments)} inline comments")
     except Exception as e:
         logger.error(f"Failed to submit review: {e}")
 

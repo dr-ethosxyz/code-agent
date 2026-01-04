@@ -83,9 +83,10 @@ def create_review(
     pr: PullRequest,
     body: str,
     comments: list[dict],
+    invalid_comments: list[dict],
     event: str = "COMMENT",
 ) -> None:
-    """Create a review on a PR."""
+    """Create a review on a PR with fallback for failed inline comments."""
     review_comments = []
     skipped = 0
     for c in comments:
@@ -107,14 +108,43 @@ def create_review(
             logger.debug(f"Skipped comment: path={path}, line={line}")
 
     if skipped > 0:
-        logger.warning(f"Skipped {skipped} comments with invalid line numbers")
+        logger.warning(f"Skipped {skipped} comments with invalid data")
 
-    pr.create_review(
-        body=body,
-        event=event,
-        comments=review_comments,
-    )
-    logger.info(f"Created review with {len(review_comments)} comments")
+    # Append invalid comments to body (fallback)
+    if invalid_comments:
+        body += "\n\n---\n**Additional Comments** (could not attach to specific lines):\n\n"
+        for c in invalid_comments:
+            path = c.get("path", "unknown")
+            line = c.get("line", "?")
+            message = c.get("message", "")
+            if message:
+                body += f"**{path}:{line}**\n{message}\n\n"
+
+    # Try to submit with inline comments
+    try:
+        pr.create_review(
+            body=body,
+            event=event,
+            comments=review_comments,
+        )
+        logger.info(f"Created review with {len(review_comments)} inline comments")
+    except Exception as e:
+        # If inline comments still fail, submit summary only
+        if "422" in str(e) and "Line could not be resolved" in str(e):
+            logger.warning(f"Inline comments failed, submitting summary only: {e}")
+            # Move all inline comments to body
+            if review_comments:
+                body += "\n\n---\n**Inline Comments** (GitHub rejected line numbers):\n\n"
+                for rc in review_comments:
+                    body += f"**{rc['path']}:{rc['line']}**\n{rc['body']}\n\n"
+            pr.create_review(
+                body=body,
+                event=event,
+                comments=[],
+            )
+            logger.info("Created review with all comments in body (fallback)")
+        else:
+            raise
 
 
 def fetch_file_contents(owner: str, repo: str, path: str, ref: str = "HEAD") -> str:

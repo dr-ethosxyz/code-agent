@@ -211,6 +211,28 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
 3. Be specific: exact line numbers and what the fix should be
 4. Use tools to get more context if needed
 
+## CRITICAL: Line Number Rules
+
+**ONLY comment on lines that appear in the diff with `+` or `-` prefix:**
+- Lines starting with `+` (added lines) - USE the line number shown in the diff
+- Lines starting with `-` (removed lines) - USE the line number shown in the diff
+- Context lines (no prefix) - DO NOT comment on these, GitHub will reject them
+
+**How to determine line numbers from the diff:**
+- Look at the hunk header: `@@ -X,Y +Z,W @@`
+- The `+Z` indicates the starting line number in the new file
+- Count forward from there for each line (skip `-` lines when counting)
+
+Example:
+```diff
+@@ -10,5 +10,7 @@
+ context line      <- line 10, but NOT valid for comment
++added line        <- line 11, VALID for comment
++another add       <- line 12, VALID for comment
+-removed line      <- line 12 in old file, can reference but carefully
+ context line      <- line 13, NOT valid for comment
+```
+
 When done, respond with JSON:
 ```json
 {
